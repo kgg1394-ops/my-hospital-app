@@ -9,21 +9,46 @@ import pandas as pd
 import math
 
 # 1. 페이지 설정 및 상태 초기화
-st.set_page_config(page_title="내 주변 병원 찾기 (네이버 연동)", layout="wide")
+st.set_page_config(page_title="내 주변 병원 찾기 (진료과목 추가)", layout="wide")
 
 if 'hospital_data' not in st.session_state:
     st.session_state.hospital_data = []
 if 'my_location' not in st.session_state:
     st.session_state.my_location = None
 
-# 두 지점 사이의 거리 계산 (단위: km)
+# 진료과목 이름과 코드 매핑 (공공데이터포털 기준)
+DEPT_CODES = {
+    "전체": "",
+    "내과": "D001",
+    "소아청소년과": "D002",
+    "신경과": "D003",
+    "정신건강의학과": "D004",
+    "외과": "D005",
+    "정형외과": "D006",
+    "신경외과": "D007",
+    "흉부외과": "D008",
+    "성형외과": "D009",
+    "마취통증의학과": "D010",
+    "산부인과": "D011",
+    "안과": "D012",
+    "이비인후과": "D013",
+    "피부과": "D014",
+    "비뇨의학과": "D016",
+    "재활의학과": "D021",
+    "가정의학과": "D024",
+    "응급의학과": "D026",
+    "치과": "D034",
+    "구강악안면외과": "D035"
+}
+
+# 거리 계산 함수
 def calculate_distance(lat1, lon1, lat2, lon2):
     R = 6371.0
     dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
     a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
     return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
 
-st.title("🏥 실시간 주변 병원 & 네이버 길 찾기")
+st.title("🏥 실시간 주변 병원 & 진료과목 검색")
 
 # 2. 인증키 확인
 try:
@@ -32,11 +57,19 @@ except:
     st.error("Secrets 설정에서 SERVICE_KEY를 확인해주세요.")
     st.stop()
 
-# 3. 데이터 로드 함수 (캐싱)
+# 3. 데이터 로드 함수 (캐싱 및 과목 코드 추가)
 @st.cache_data(ttl=600)
-def get_hospital_data(city, town, rows, s_key):
+def get_hospital_data(city, town, rows, s_key, dept_code):
     url = 'http://apis.data.go.kr/B552657/HsptlAsembySearchService/getHsptlMdcncListInfoInqire'
-    params = {'serviceKey': s_key, 'Q0': city, 'Q1': town, 'numOfRows': rows, 'pageNo': '1'}
+    # QD 파라미터에 진료과목 코드를 추가합니다.
+    params = {
+        'serviceKey': s_key, 
+        'Q0': city, 
+        'Q1': town, 
+        'QD': dept_code, 
+        'numOfRows': rows, 
+        'pageNo': '1'
+    }
     try:
         res = requests.get(url, params=params, timeout=10)
         root = ET.fromstring(res.text)
@@ -71,6 +104,11 @@ if loc:
 st.sidebar.markdown("---")
 city_input = st.sidebar.text_input("시/도", "서울특별시")
 town_input = st.sidebar.text_input("시/군구", "강남구")
+
+# 진료과목 선택 박스 추가
+selected_dept_name = st.sidebar.selectbox("👨‍⚕️ 진료과목 선택", list(DEPT_CODES.keys()))
+selected_dept_code = DEPT_CODES[selected_dept_name]
+
 radius_km = st.sidebar.slider("📍 내 주변 반경 (km)", 0.5, 10.0, 3.0, step=0.5)
 
 st.sidebar.markdown("---")
@@ -79,7 +117,8 @@ is_emergency = st.sidebar.checkbox("🚨 응급실 운영 기관")
 
 if st.sidebar.button("🔍 병원 검색 시작"):
     with st.spinner('데이터를 불러오는 중...'):
-        st.session_state.hospital_data = get_hospital_data(city_input, town_input, 200, service_key)
+        # API 호출 시 과목 코드를 전달합니다.
+        st.session_state.hospital_data = get_hospital_data(city_input, town_input, 200, service_key, selected_dept_code)
 
 # 5. 화면 출력 및 필터링
 if st.session_state.hospital_data:
@@ -92,28 +131,26 @@ if st.session_state.hospital_data:
     for h in raw_data:
         if not h['lat'] or not h['lon']: continue
         
-        # 1) 거리 필터
+        # 거리 필터
         dist = 0
         if st.session_state.my_location:
             dist = calculate_distance(st.session_state.my_location['lat'], st.session_state.my_location['lon'], float(h['lat']), float(h['lon']))
             if dist > radius_km: continue
         
-        # 2) 진료 시간 필터
+        # 진료 시간 필터
         st_t, en_t = h[f't{weekday}s'], h[f't{weekday}e']
         is_open = (st_t and en_t and st_t <= curr_time <= en_t)
         if is_open_now and not is_open: continue
         if is_emergency and h['eryn'] != '1': continue
         
-        # 3) 네이버 지도 길찾기 링크 생성
-        # PC/모바일 통합 검색 및 길찾기 URL
         naver_link = f"https://map.naver.com/v5/search/{h['name']}?c={h['lon']},{h['lat']},15,0,0,0,dh"
 
         filtered.append({
             '병원명': h['name'], 
             '거리(km)': round(dist, 2) if st.session_state.my_location else "N/A",
             '상태': '✅ 진료중' if is_open else '⏳ 종료',
-            '길찾기': naver_link, # 링크 데이터
-            '응급실': '🚨 운영' if h['eryn'] == '1' else 'X',
+            '길찾기': naver_link,
+            '분류': h['div'],
             '전화': h['tel'], '주소': h['addr'],
             'lat': float(h['lat']), 'lon': float(h['lon'])
         })
@@ -122,7 +159,7 @@ if st.session_state.hospital_data:
         filtered = sorted(filtered, key=lambda x: x['거리(km)'])
 
     if filtered:
-        st.info(f"📍 내 위치에서 **{radius_km}km** 내 병원 {len(filtered)}곳 발견")
+        st.info(f"📍 **{selected_dept_name}** 병원 중 **{radius_km}km** 내 {len(filtered)}곳 발견")
         col1, col2 = st.columns([1.5, 1])
         
         with col1:
@@ -140,15 +177,14 @@ if st.session_state.hospital_data:
             st.components.v1.html(m._repr_html_(), height=550)
             
         with col2:
-            # 데이터프레임에서 링크를 클릭 가능하게 설정
             df = pd.DataFrame(filtered).drop(['lat', 'lon'], axis=1)
             st.dataframe(
                 df, 
                 column_config={
-                    "길찾기": st.column_config.LinkColumn("네이버 지도", help="클릭하면 네이버 지도로 이동합니다", display_text="길찾기 열기")
+                    "길찾기": st.column_config.LinkColumn("네이버 지도", display_text="길찾기 열기")
                 },
                 height=550,
                 hide_index=True
             )
     else:
-        st.warning("조건에 맞는 병원이 없습니다. 반경을 넓혀보세요.")
+        st.warning(f"{radius_km}km 이내에는 진료 가능한 {selected_dept_name}이 없습니다.")
