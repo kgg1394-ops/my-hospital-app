@@ -99,25 +99,32 @@ if st.session_state.hospital_data:
 
     filtered = []
     for h in raw_data:
-        if not h['lat'] or not h['lon']: continue
+        if not h['lat'] or not h['lon'] or not h['addr']: continue
         
-        # [핵심 추가] 지역명 엄격 체크 (양주 vs 남양주 구분)
-        # 선택한 '양주시'가 주소에 포함되어 있지 않으면 과감히 버립니다.
-        if selected_town not in h['addr']:
-            continue
+        # [수술 부위: 정밀 감별 진단] 
+        # 주소를 공백으로 나눕니다. 예: ["경기도", "양주시", "고읍동..."]
+        addr_parts = h['addr'].split()
+        
+        # 주소의 두 번째 단어(index 1)가 선택한 구/시와 정확히 일치해야만 통과!
+        # "남양주시"는 "양주시"와 글자 자체는 포함관계지만, 단어 전체로는 다르므로 탈락합니다.
+        if len(addr_parts) > 1:
+            if addr_parts[1] != selected_town:
+                continue
+        else:
+            # 주소 형식이 이상할 경우를 대비한 2차 방어선
+            if selected_town not in h['addr'].split(' ')[1:2]: 
+                continue
 
-        # 거리 필터
+        # --- 이후 거리 및 시간 필터는 동일하게 진행 ---
         dist = 0
         if st.session_state.my_location:
             dist = calculate_distance(st.session_state.my_location['lat'], st.session_state.my_location['lon'], float(h['lat']), float(h['lon']))
             if dist > radius_km: continue
         
-        # (이하 기존 필터 로직 동일...)
         st_t, en_t = h['times'][weekday]
         is_open = (st_t and en_t and st_t <= curr_time <= en_t)
         if only_open and not is_open: continue
         
-        # 데이터 담기
         filtered.append({
             '병원명': h['name'], 
             '거리(km)': round(dist, 2) if st.session_state.my_location else "N/A",
@@ -147,3 +154,4 @@ if st.session_state.hospital_data:
             st.dataframe(pd.DataFrame(filtered).drop(['lat', 'lon'], axis=1), 
                          column_config={"길찾기": st.column_config.LinkColumn("네이버", display_text="열기")},
                          height=550, hide_index=True)
+
