@@ -9,14 +9,14 @@ import pandas as pd
 import math
 
 # 1. 페이지 설정 및 상태 유지
-st.set_page_config(page_title="전국 병원 찾기 전문판", layout="wide")
+st.set_page_config(page_title="실시간 주변 병원 찾기", layout="wide")
 
 if 'hospital_data' not in st.session_state:
     st.session_state.hospital_data = []
 if 'my_location' not in st.session_state:
     st.session_state.my_location = None
 
-# --- [데이터] 대한민국 모든 진료과목 코드 (보건복지부 표준) ---
+# --- [데이터] 대한민국 모든 진료과목 코드 ---
 DEPT_CODES = {
     "전체": "",
     "내과": "D001", "소아청소년과": "D002", "신경과": "D003", "정신건강의학과": "D004",
@@ -30,7 +30,7 @@ DEPT_CODES = {
     "소아치과": "D041", "구강병리과": "D042", "예방치과": "D043", "보건": "D044"
 }
 
-# --- [데이터] 행정구역 맵핑 ---
+# --- [데이터] 행정구역 맵핑 (시/도별 시/군/구) ---
 KOREA_REGION_MAP = {
     "서울특별시": ["강남구", "강동구", "강북구", "강서구", "관악구", "광진구", "구로구", "금천구", "노원구", "도봉구", "동대문구", "동작구", "마포구", "서대문구", "서초구", "성동구", "성북구", "송파구", "양천구", "영등포구", "용산구", "은평구", "종로구", "중구", "중랑구"],
     "경기도": ["가평군", "고양시 덕양구", "고양시 일산동구", "고양시 일산서구", "과천시", "광명시", "광주시", "구리시", "군포시", "김포시", "남양주시", "동두천시", "부천시", "성남시 수정구", "성남시 중원구", "성남시 분당구", "수원시 장안구", "수원시 권선구", "수원시 팔달구", "수원시 영통구", "시흥시", "안산시 상록구", "안산시 단원구", "안성시", "안양시 만안구", "안양시 동안구", "양주시", "양평군", "여주시", "연천군", "오산시", "용인시 처인구", "용인시 기흥구", "용인시 수지구", "의왕시", "의정부시", "이천시", "파주시", "평택시", "포천시", "하남시", "화성시"],
@@ -51,12 +51,14 @@ KOREA_REGION_MAP = {
     "제주특별자치도": ["제주시", "서귀포시"]
 }
 
+# 거리 계산 함수 (Haversine 공식)
 def calculate_distance(lat1, lon1, lat2, lon2):
     R = 6371.0
     dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
     a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
     return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
 
+# API 데이터 호출 함수 (캐싱 적용)
 @st.cache_data(ttl=600)
 def fetch_api_data(city, town, dept_code, s_key):
     url = 'http://apis.data.go.kr/B552657/HsptlAsembySearchService/getHsptlMdcncListInfoInqire'
@@ -75,26 +77,26 @@ def fetch_api_data(city, town, dept_code, s_key):
     except: return []
 
 # --- 사이드바 ---
-st.sidebar.header("📍 1. 내 위치 수신")
-loc = streamlit_js_eval(data_key='getLocation', label='📡 내 위치 확인 (클릭)', key='get_loc')
+st.sidebar.header("📍 1. 내 위치 정보")
+loc = streamlit_js_eval(data_key='getLocation', label='📡 내 위치 수신 (클릭)', key='get_loc')
 if loc:
     st.session_state.my_location = {'lat': loc['coords']['latitude'], 'lon': loc['coords']['longitude']}
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔍 2. 지역 및 과목 선택")
-selected_city = st.sidebar.selectbox("시/도 선택", list(KOREA_REGION_MAP.keys()), index=1) # 기본 경기도
+selected_city = st.sidebar.selectbox("시/도 선택", list(KOREA_REGION_MAP.keys()), index=1)
 selected_town = st.sidebar.selectbox("시/군/구 선택", KOREA_REGION_MAP[selected_city])
-# [포인트] 모든 진료과목을 알파벳순 혹은 중요도순으로 나열
-selected_dept = st.sidebar.selectbox("👨‍⚕️ 진료과목 (전체 포함)", list(DEPT_CODES.keys()))
+selected_dept = st.sidebar.selectbox("진료과목 선택", list(DEPT_CODES.keys()))
 
-if st.sidebar.button("🚀 데이터 가져오기"):
-    with st.spinner('정보를 불러오고 있습니다...'):
+if st.sidebar.button("🚀 데이터 업데이트"):
+    with st.spinner('정보를 가져오고 있습니다...'):
         st.session_state.hospital_data = fetch_api_data(selected_city, selected_town, DEPT_CODES[selected_dept], st.secrets["SERVICE_KEY"])
 
 st.sidebar.markdown("---")
-st.sidebar.header("🎯 3. 반경 및 진료 필터")
-radius_km = st.sidebar.slider("거리 반경 (km)", 0.5, 5.0, 5.0, step=0.5)
-only_open = st.sidebar.checkbox("✅ 현재 진료 가능")
+st.sidebar.header("🎯 3. 필터 설정")
+# 반경 기본값 5km 설정
+radius_km = st.sidebar.slider("반경 (km)", 0.5, 15.0, 5.0, step=0.5)
+only_open = st.sidebar.checkbox("✅ 현재 진료 중")
 
 # --- 메인 로직 ---
 if st.session_state.hospital_data:
@@ -109,8 +111,8 @@ if st.session_state.hospital_data:
         
         # [정밀 필터] 양주/남양주 엄격 구분 (단어 단위 비교)
         addr_parts = h['addr'].split()
-        if len(addr_parts) > 1 and addr_parts[1] != selected_town:
-            continue
+        if len(addr_parts) > 1:
+            if addr_parts[1] != selected_town: continue
         
         # 거리 계산
         dist = 0
@@ -136,24 +138,40 @@ if st.session_state.hospital_data:
         filtered = sorted(filtered, key=lambda x: x['거리(km)'])
 
     if filtered:
-        st.success(f"검색 결과: 총 {len(filtered)}개의 병원을 찾았습니다.")
+        st.success(f"📍 {selected_town} - {selected_dept} 병원 {len(filtered)}곳 발견 (반경 {radius_km}km)")
         col1, col2 = st.columns([1.5, 1])
+        
         with col1:
+            # 지도 중심점 설정
             center = [st.session_state.my_location['lat'], st.session_state.my_location['lon']] if st.session_state.my_location else [filtered[0]['lat'], filtered[0]['lon']]
+            
+            # 지도 객체 생성
             m = folium.Map(location=center, zoom_start=13)
+            
+            # 내 위치 및 반경 원 표시
             if st.session_state.my_location:
                 folium.Marker(center, popup="내 위치", icon=folium.Icon(color='green', icon='user', prefix='fa')).add_to(m)
+                folium.Circle(center, radius=radius_km * 1000, color='green', fill=True, fill_opacity=0.05).add_to(m)
+            
+            # 병원 마커 표시
             for f in filtered:
-                color = 'red' if f['응급실'] == '🚨 운영' else 'blue'
-                folium.Marker([f['lat'], f['lon']], 
-                              popup=folium.Popup(f"<b>{f['병원명']}</b><br><a href='{f['길찾기']}' target='_blank'>네이버 지도</a>", max_width=200),
-                              icon=folium.Icon(color=color, icon='info-sign')).add_to(m)
-            st_folium(m, height=550, width=700, returned_objects=[])
+                m_color = 'red' if f['응급실'] == '🚨 운영' else 'blue'
+                folium.Marker(
+                    [f['lat'], f['lon']], 
+                    popup=folium.Popup(f"<b>{f['병원명']}</b><br><a href='{f['길찾기']}' target='_blank'>네이버 지도</a>", max_width=200),
+                    icon=folium.Icon(color=m_color, icon='info-sign')
+                ).add_to(m)
+            
+            # [수정] st_folium을 사용하여 안정적으로 출력
+            st_folium(m, height=550, use_container_width=True, key="main_map")
+            
         with col2:
-            st.dataframe(pd.DataFrame(filtered).drop(['lat', 'lon'], axis=1), 
-                         column_config={"길찾기": st.column_config.LinkColumn("지도", display_text="열기")},
-                         height=550, hide_index=True)
+            st.dataframe(
+                pd.DataFrame(filtered).drop(['lat', 'lon'], axis=1), 
+                column_config={"길찾기": st.column_config.LinkColumn("네이버", display_text="열기")},
+                height=550, hide_index=True
+            )
     else:
-        st.warning("선택하신 반경 내에 조건에 맞는 병원이 없습니다.")
+        st.warning(f"설정하신 {radius_km}km 이내에 조건에 맞는 병원이 없습니다.")
 else:
-    st.info("👈 왼쪽 사이드바에서 지역과 진료과목을 선택한 후 [데이터 가져오기]를 눌러주세요.")
+    st.info("👈 왼쪽 사이드바에서 지역을 선택한 후 [데이터 업데이트] 버튼을 눌러주세요.")
